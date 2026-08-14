@@ -127,6 +127,78 @@ void HAL_CAN_MspDeInit(CAN_HandleTypeDef* canHandle)
 }
 
 /* USER CODE BEGIN 1 */
+#include "cmsis_os.h"
+#include "app_proto.h"
 
+extern osMessageQueueId_t canRxQ;
+
+/* 主板硬件过滤: 只收从板反馈0x002 / 从板状态0x012 / 蜂鸣指令0x003,
+ * 500Hz 噪声等其它 ID 在硬件层直接被丢弃 */
+static void can_config_filter(void)
+{
+  const uint32_t ids[3] = { ID_SLAVE_FEEDBACK, ID_SLAVE_STATUS, ID_BEEP_CMD };
+
+  for (int i = 0; i < 3; i++)
+  {
+    CAN_FilterTypeDef f = {0};
+    f.FilterActivation    = CAN_FILTER_ENABLE;
+    f.FilterBank          = i;                     /* 用前 3 个过滤器 */
+    f.FilterMode          = CAN_FILTERMODE_IDMASK;
+    f.FilterScale         = CAN_FILTERSCALE_32BIT;
+    f.FilterIdHigh        = (uint16_t)(ids[i] << 5);   /* 标准帧 32bit 过滤器格式 */
+    f.FilterIdLow         = 0;
+    f.FilterMaskIdHigh    = (uint16_t)(0x7FFu << 5);   /* 掩码全 1 = 精确匹配 */
+    f.FilterMaskIdLow     = 0;
+    f.FilterFIFOAssignment = CAN_RX_FIFO0;
+    if (HAL_CAN_ConfigFilter(&hcan1, &f) != HAL_OK)
+    {
+      Error_Handler();
+    }
+  }
+}
+
+/* 在任务里调用: 配置过滤 -> 启动 CAN -> 使能 RX0 中断 */
+void can_start(void)
+{
+  can_config_filter();
+  HAL_CAN_Start(&hcan1);
+  HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
+}
+
+/* 标准帧/扩展帧自适应发送 */
+void can_send_frame(const can_frame_t *f)
+{
+  CAN_TxHeaderTypeDef tx = {0};
+  uint32_t mailbox;
+
+  if (f->id > 0x7FF)               /* 0x02010101 为扩展帧 */
+  {
+    tx.IDE   = CAN_ID_EXT;
+    tx.ExtId = f->id;
+  }
+  else
+  {
+    tx.IDE   = CAN_ID_STD;
+    tx.StdId = f->id;
+  }
+  tx.RTR = CAN_RTR_DATA;
+  tx.DLC = f->dlc;
+  HAL_CAN_AddTxMessage(&hcan1, &tx, (uint8_t*)f->data, &mailbox);
+}
+
+/* RX0 中断回调(ISR): 取报文入队, 任务里再处理 */
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+  if (hcan->Instance != CAN1) return;
+
+  can_frame_t f;
+  CAN_RxHeaderTypeDef rx;
+  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx, f.data) == HAL_OK)
+  {
+    f.id  = (rx.IDE == CAN_ID_EXT) ? rx.ExtId : rx.StdId;
+    f.dlc = rx.DLC;
+    osMessageQueuePut(canRxQ, &f, 0, 0);
+  }
+}
 /* USER CODE END 1 */
 

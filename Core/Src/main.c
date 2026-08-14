@@ -95,7 +95,7 @@ int main(void)
   MX_TIM3_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);   /* 启动呼吸灯 PWM */
   /* USER CODE END 2 */
 
   /* Init scheduler */

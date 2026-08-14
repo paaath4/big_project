@@ -115,6 +115,62 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 }
 
 /* USER CODE BEGIN 1 */
+#include "cmsis_os.h"
+#include "app_proto.h"
+#include <string.h>
 
+extern osMessageQueueId_t vofaCmdQ;
+
+static uint8_t vofa_rx_byte;
+static uint8_t vofa_state = 0;   
+static uint8_t vofa_buf[3];
+
+/* 启动 单字节接收中断 */
+void vofa_uart_start_rx(void)
+{
+  HAL_UART_Receive_IT(&huart1, &vofa_rx_byte, 1);
+}
+
+/* 每收一字节进来, 进行sitch判断; 完整帧 A5 XX XX XX 5A 入队 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance != USART1) return;//若是串口1，进行下一步swtich
+
+  uint8_t b = vofa_rx_byte;
+  switch (vofa_state) //状态机进行选择
+  {
+    case 0:                          /* 等帧头 A5 */
+      if (b == VOFA_FRAME_HEAD) vofa_state = 1;
+      break;
+    case 1:  vofa_buf[0] = b; vofa_state = 2; break;   /* 开/关 */
+    case 2:  vofa_buf[1] = b; vofa_state = 3; break;   /* 周期低 */
+    case 3:  vofa_buf[2] = b; vofa_state = 4; break;   /* 周期高 */
+    case 4:                          /* 等帧尾 5A */
+      vofa_state = 0;
+      if (b == VOFA_FRAME_TAIL && vofaCmdQ != NULL)
+      {
+        osMessageQueuePut(vofaCmdQ, vofa_buf, 0, 0); //校验通过入队
+      }
+      break;
+    default: vofa_state = 0; break;
+  }
+  vofa_uart_start_rx();              /* 重新启动，收下一个字节 */
+}
+
+/* JustFloat打波: n 个 float + 帧尾 00 00 80 7F */
+void vofa_send_floats(float *data, uint8_t n)
+{
+  if (n > 3) n = 3; //最多n个
+  uint8_t buf[16];
+  for (uint8_t i = 0; i < n; i++)
+  {
+    memcpy(&buf[i * 4], &data[i], 4);   /* float -> 4 字节小端 */
+  }
+  buf[n*4 + 0] = 0x00;
+  buf[n*4 + 1] = 0x00;
+  buf[n*4 + 2] = 0x80;
+  buf[n*4 + 3] = 0x7F;//justfloat协议尾 00 00 80 7F
+  HAL_UART_Transmit(&huart1, buf, n*4 + 4, 10);
+}
 /* USER CODE END 1 */
 
