@@ -82,20 +82,6 @@ const osThreadAttr_t StatusLed_Task_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for VOFA_Rx_Task */
-osThreadId_t VOFA_Rx_TaskHandle;
-const osThreadAttr_t VOFA_Rx_Task_attributes = {
-  .name = "VOFA_Rx_Task",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* Definitions for Can_Send_Task */
-osThreadId_t Can_Send_TaskHandle;
-const osThreadAttr_t Can_Send_Task_attributes = {
-  .name = "Can_Send_Task",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
 /* Definitions for Can_Rx_Task */
 osThreadId_t Can_Rx_TaskHandle;
 const osThreadAttr_t Can_Rx_Task_attributes = {
@@ -103,12 +89,19 @@ const osThreadAttr_t Can_Rx_Task_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for VOFA_Send_Task */
-osThreadId_t VOFA_Send_TaskHandle;
-const osThreadAttr_t VOFA_Send_Task_attributes = {
-  .name = "VOFA_Send_Task",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+/* Definitions for Feedback_Task */
+osThreadId_t Feedback_TaskHandle;
+const osThreadAttr_t Feedback_Task_attributes = {
+  .name = "Feedback_Task",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for Status_Send_Tsa */
+osThreadId_t Status_Send_TsaHandle;
+const osThreadAttr_t Status_Send_Tsa_attributes = {
+  .name = "Status_Send_Tsa",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityLow,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -118,10 +111,9 @@ const osThreadAttr_t VOFA_Send_Task_attributes = {
 
 void Breath_Led(void *argument);
 void Status_Led(void *argument);
-void VOFA_Rx(void *argument);
-void Can_Send(void *argument);
 void Can_Rx(void *argument);
-void VOFA_Send(void *argument);
+void Feedback(void *argument);
+void Status_Send(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -161,17 +153,14 @@ void MX_FREERTOS_Init(void) {
   /* creation of StatusLed_Task */
   StatusLed_TaskHandle = osThreadNew(Status_Led, NULL, &StatusLed_Task_attributes);
 
-  /* creation of VOFA_Rx_Task */
-  VOFA_Rx_TaskHandle = osThreadNew(VOFA_Rx, NULL, &VOFA_Rx_Task_attributes);
-
-  /* creation of Can_Send_Task */
-  Can_Send_TaskHandle = osThreadNew(Can_Send, NULL, &Can_Send_Task_attributes);
-
   /* creation of Can_Rx_Task */
   Can_Rx_TaskHandle = osThreadNew(Can_Rx, NULL, &Can_Rx_Task_attributes);
 
-  /* creation of VOFA_Send_Task */
-  VOFA_Send_TaskHandle = osThreadNew(VOFA_Send, NULL, &VOFA_Send_Task_attributes);
+  /* creation of Feedback_Task */
+  Feedback_TaskHandle = osThreadNew(Feedback, NULL, &Feedback_Task_attributes);
+
+  /* creation of Status_Send_Tsa */
+  Status_Send_TsaHandle = osThreadNew(Status_Send, NULL, &Status_Send_Tsa_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -237,77 +226,6 @@ void Status_Led(void *argument)
   /* USER CODE END Status_Led */
 }
 
-/* USER CODE BEGIN Header_VOFA_Rx */
-/**
-* @brief Function implementing the VOFA_Rx_Task thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_VOFA_Rx */
-void VOFA_Rx(void *argument)
-{
-  /* USER CODE BEGIN VOFA_Rx */
-  /* VOFA 指令: 等串口解析出的 A5..5A 指令, 本地生效 + 转发从板 */
-  vofa_uart_start_rx();
-
-  uint8_t cmd[3];
-  for(;;)
-  {
-    if (osMessageQueueGet(vofaCmdQ, cmd, NULL, osWaitForever) == osOK)
-    {
-      uint16_t per = (uint16_t)(cmd[1] | (cmd[2] << 8));   /* 周期(小端) */
-      if (per < 100) per = 100;                            /* 周期下限保护 */
-
-      g_breath_on = (cmd[0] == CTRL_BYTE_ON) ? 1 : 0;
-      g_period_ms = per;
-
-      /* 组 CAN 帧 0x001 发给从板 */
-      can_frame_t f;
-      f.id       = ID_BREATH_CTRL;
-      f.dlc      = 3;
-      f.data[0]  = cmd[0];
-      f.data[1]  = (uint8_t)(per & 0xFF);
-      f.data[2]  = (uint8_t)(per >> 8);
-      osMessageQueuePut(canTxQ, &f, 0, 0);
-    }
-  }
-  /* USER CODE END VOFA_Rx */
-}
-
-/* USER CODE BEGIN Header_Can_Send */
-/**
-* @brief Function implementing the Can_Send_Task thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_Can_Send */
-void Can_Send(void *argument)
-{
-  /* USER CODE BEGIN Can_Send */
-  /* CAN 发送: 队列里来指令就发; 每 500ms 顺带发主板状态 0x02010101 */
-  can_start();                       /* 过滤+启动+使能接收中断 */
-
-  can_frame_t f;
-  uint32_t last = 0;
-  for(;;)
-  {
-    if (osMessageQueueGet(canTxQ, &f, NULL, pdMS_TO_TICKS(500)) == osOK)
-    {
-      can_send_frame(&f);
-    }
-    if (HAL_GetTick() - last >= 500)
-    {
-      last = HAL_GetTick();
-      can_frame_t s;
-      s.id      = ID_MASTER_STATUS;  /* 扩展帧 */
-      s.dlc     = 1;
-      s.data[0] = (uint8_t)g_breath_on;
-      can_send_frame(&s);
-    }
-  }
-  /* USER CODE END Can_Send */
-}
-
 /* USER CODE BEGIN Header_Can_Rx */
 /**
 * @brief Function implementing the Can_Rx_Task thread.
@@ -347,27 +265,40 @@ void Can_Rx(void *argument)
   /* USER CODE END Can_Rx */
 }
 
-/* USER CODE BEGIN Header_VOFA_Send */
+/* USER CODE BEGIN Header_Feedback */
 /**
-* @brief Function implementing the VOFA_Send_Task thread.
+* @brief Function implementing the Feedback_Task thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_VOFA_Send */
-void VOFA_Send(void *argument)
+/* USER CODE END Header_Feedback */
+void Feedback(void *argument)
 {
-  /* USER CODE BEGIN VOFA_Send */
-  /* VOFA 上报: JustFloat 协议打波, ch0=从板亮度 ch1=周期 ch2=开关 */
+  /* USER CODE BEGIN Feedback */
+  /* Infinite loop */
   for(;;)
   {
-    float v[3];
-    v[0] = g_slave_valid ? g_slave_val : g_breath_val;  /* 从板没数据时用自己亮度 */
-    v[1] = (float)g_period_ms;
-    v[2] = (float)g_breath_on;
-    vofa_send_floats(v, 3);
-    osDelay(10);
+    osDelay(1);
   }
-  /* USER CODE END VOFA_Send */
+  /* USER CODE END Feedback */
+}
+
+/* USER CODE BEGIN Header_Status_Send */
+/**
+* @brief Function implementing the Status_Send_Tsa thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Status_Send */
+void Status_Send(void *argument)
+{
+  /* USER CODE BEGIN Status_Send */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END Status_Send */
 }
 
 /* Private application code --------------------------------------------------*/

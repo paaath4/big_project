@@ -21,7 +21,6 @@
 #include "cmsis_os.h"
 #include "can.h"
 #include "tim.h"
-#include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -93,7 +92,6 @@ int main(void)
   MX_GPIO_Init();
   MX_CAN1_Init();
   MX_TIM3_Init();
-  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);   /* 启动呼吸灯 PWM */
   /* USER CODE END 2 */
