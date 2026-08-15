@@ -1,7 +1,7 @@
 big_project/freertos.o: ..\Core\Src\freertos.c \
   ..\Middlewares\Third_Party\FreeRTOS\Source\include\FreeRTOS.h \
-  F:\Keil\ARM\ARMCLANG\Bin\..\include\stddef.h \
-  F:\Keil\ARM\ARMCLANG\Bin\..\include\stdint.h \
+  D:\keil5\ARM\ARMCLANG\Bin\..\include\stddef.h \
+  D:\keil5\ARM\ARMCLANG\Bin\..\include\stdint.h \
   ..\Core\Inc\FreeRTOSConfig.h \
   ..\Middlewares\Third_Party\FreeRTOS\Source\include\projdefs.h \
   ..\Middlewares\Third_Party\FreeRTOS\Source\include\portable.h \
@@ -40,6 +40,6 @@ big_project/freertos.o: ..\Core\Src\freertos.c \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h \
   ..\Middlewares\Third_Party\FreeRTOS\Source\CMSIS_RTOS_V2\cmsis_os.h \
   ..\Middlewares\Third_Party\FreeRTOS\Source\CMSIS_RTOS_V2\cmsis_os2.h \
-  F:\Keil\ARM\ARMCLANG\Bin\..\include\math.h \
-  F:\Keil\ARM\ARMCLANG\Bin\..\include\string.h ..\Core\Inc\app_proto.h \
+  D:\keil5\ARM\ARMCLANG\Bin\..\include\math.h \
+  D:\keil5\ARM\ARMCLANG\Bin\..\include\string.h ..\Core\Inc\app_proto.h \
   ..\Core\Inc\tim.h

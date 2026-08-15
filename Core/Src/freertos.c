@@ -48,25 +48,18 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-/* 队列句柄(在 MX_FREERTOS_Init 里创建, can.c/usart.c 里 extern 使用) */
-osMessageQueueId_t vofaCmdQ;
-osMessageQueueId_t canTxQ;
+/* 队列句柄(在 MX_FREERTOS_Init 里创建, can.c 里 extern 使用) */
 osMessageQueueId_t canRxQ;
 
-/* 共享状态 */
-volatile uint8_t g_breath_on = 0;
-volatile uint16_t g_period_ms = 2000; /* 呼吸周期, 可被 VOFA 指令修改 */
-volatile float g_breath_val = 0.0f;   /* 主板自身呼吸亮度 0~1 */
-volatile float g_slave_val = 0.0f;    /* 从板 100Hz 反馈的 float */
-volatile uint8_t g_slave_valid = 0;
-volatile uint8_t g_slave_status = 0;
+/* 共享状态(Can_Rx 任务更新, 其它任务读取) */
+volatile uint8_t  g_breath_on    = 0;
+volatile uint16_t g_period_ms    = 2000;   /* 呼吸周期 ms, 由主板 0x001 指令设置 */
+volatile float    g_breath_val   = 0.0f;   /* 当前呼吸亮度 0~1, 也是 100Hz 反馈的 float */
+volatile uint8_t  g_master_alive = 0;      /* 收到主板 0x02010101 置1 */
 
 extern void can_start(void);
 extern void can_send_frame(const can_frame_t *f);
-extern void vofa_uart_start_rx(void);
-extern void vofa_send_floats(float *data, uint8_t n);
-
-void beep_times(uint8_t n); /* 定义在文件底部, 先声明供 StartTask05 调用 */
+void beep_times(uint8_t n);   /* 定义在文件底部, 先声明供 Can_Rx 调用 */
 /* USER CODE END Variables */
 /* Definitions for BreathLed__Task */
 osThreadId_t BreathLed__TaskHandle;
@@ -140,10 +133,8 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* 中断(串口/CAN) -> 任务 传数据用 */
-  vofaCmdQ = osMessageQueueNew(4, 3, NULL);                  /* 3字节 VOFA 指令 */
-  canTxQ = osMessageQueueNew(8, sizeof(can_frame_t), NULL);  /* 待发送 CAN 帧 */
-  canRxQ = osMessageQueueNew(16, sizeof(can_frame_t), NULL); /* 收到的 CAN 帧 */
+  /* CAN 中断 -> Can_Rx 任务 传数据用 */
+  canRxQ = osMessageQueueNew(16, sizeof(can_frame_t), NULL);  /* 收到的 CAN 帧 */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -182,33 +173,27 @@ void MX_FREERTOS_Init(void) {
 void Breath_Led(void *argument)
 {
   /* USER CODE BEGIN Breath_Led */
-  /* 软件 PWM 控制 LED1 (PA4) */
-  uint16_t phase = 0; // 0~100 对应占空比步进
-  while (1)
+  /* 呼吸灯: 按周期更新 PC6 上 TIM3_CH1 的 PWM 占空比 */
+  uint32_t t = 0;
+  for (;;)
   {
-    if (g_breath_on) // 全局变量由 CAN 命令更新
+    if (g_breath_on)
     {
-      /* 正弦变化，周期为 g_period_ms (单位 ms) */
-      float rad = 2.0f * 3.14159f * (float)phase / 100.0f;
-      uint8_t duty = (uint8_t)(50 * (sinf(rad) + 1)); // 0~100
-      uint16_t on_time = g_period_ms * duty / 100;
-      uint16_t off_time = g_period_ms - on_time;
-
-      HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_SET);
-      osDelay(on_time);
-      HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_RESET);
-      osDelay(off_time);
-
-      phase = (phase + 1) % 100;
+      float phase = 2.0f * 3.14159f * (float)t / (float)g_period_ms;
+      g_breath_val = 0.5f + 0.5f * sinf(phase);              /* 0~1 正弦 */
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1,
+                            (uint32_t)(g_breath_val * 999.0f));
+      t = (t + 10) % g_period_ms;
     }
     else
     {
-      HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_RESET);
-      osDelay(100);
+      g_breath_val = 0.0f;
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
     }
+    osDelay(10);
   }
-}
   /* USER CODE END Breath_Led */
+}
 
 
 /* USER CODE BEGIN Header_Status_Led */
@@ -221,10 +206,14 @@ void Breath_Led(void *argument)
 void Status_Led(void *argument)
 {
   /* USER CODE BEGIN Status_Led */
-  /* Infinite loop */
-  for(;;)
+  /* 状态灯: 两颗灯不同频率闪烁, 指示系统运行 */
+  uint32_t cnt = 0;
+  for (;;)
   {
-    osDelay(1);
+    cnt++;
+    if (cnt % 5 == 0)  HAL_GPIO_TogglePin(LED_1_GPIO_Port, LED_1_Pin);  /* 每 500ms */
+    if (cnt % 10 == 0) HAL_GPIO_TogglePin(LED_2_GPIO_Port, LED_2_Pin);  /* 每 1000ms */
+    osDelay(100);
   }
   /* USER CODE END Status_Led */
 }
@@ -239,10 +228,34 @@ void Status_Led(void *argument)
 void Can_Rx(void *argument)
 {
   /* USER CODE BEGIN Can_Rx */
-  /* Infinite loop */
-  for(;;)
+  /* CAN 接收: 处理主板指令/蜂鸣/主板状态 */
+  can_start();                       /* 过滤+启动+使能接收中断 */
+
+  can_frame_t f;
+  for (;;)
   {
-    osDelay(1);
+    if (osMessageQueueGet(canRxQ, &f, NULL, osWaitForever) == osOK)
+    {
+      switch (f.id)
+      {
+        case ID_BREATH_CTRL:         /* 主板呼吸灯指令 0x001 */
+          if (f.dlc >= 3)
+          {
+            g_breath_on = (f.data[0] == CTRL_BYTE_ON) ? 1 : 0;
+            g_period_ms = (uint16_t)(f.data[1] | (f.data[2] << 8));
+            if (g_period_ms < 100) g_period_ms = 100;
+          }
+          break;
+        case ID_BEEP_CMD:            /* CANable 蜂鸣 0x003 */
+          if (f.dlc >= 1) beep_times(f.data[0]);
+          break;
+        case ID_MASTER_STATUS:       /* 主板状态 0x02010101 (证明过滤放行) */
+          g_master_alive = 1;
+          break;
+        default:
+          break;
+      }
+    }
   }
   /* USER CODE END Can_Rx */
 }
@@ -257,10 +270,19 @@ void Can_Rx(void *argument)
 void Feedback(void *argument)
 {
   /* USER CODE BEGIN Feedback */
-  /* Infinite loop */
-  for(;;)
+  /* 100Hz 反馈: 每 10ms 发一次 0x002, 数据为当前呼吸亮度 float */
+  uint32_t last = osKernelGetTickCount();
+  for (;;)
   {
-    osDelay(1);
+    float v = g_breath_val;              /* 先拷到非 volatile 局部变量 */
+    can_frame_t f;
+    f.id  = ID_SLAVE_FEEDBACK;
+    f.dlc = 4;
+    memcpy(f.data, &v, 4);               /* float -> 4 字节小端, 和主板解析一致 */
+
+    can_send_frame(&f);
+    last += 10;
+    osDelayUntil(last);                  /* 精确 10ms = 100Hz */
   }
   /* USER CODE END Feedback */
 }
@@ -275,10 +297,18 @@ void Feedback(void *argument)
 void Status_Send(void *argument)
 {
   /* USER CODE BEGIN Status_Send */
-  /* Infinite loop */
-  for(;;)
+  /* 周期发送从板状态 0x012 */
+  uint32_t last = osKernelGetTickCount();
+  for (;;)
   {
-    osDelay(1);
+    can_frame_t f;
+    f.id      = ID_SLAVE_STATUS;
+    f.dlc     = 1;
+    f.data[0] = (uint8_t)g_breath_on;    /* 状态字节: 当前呼吸开关 */
+
+    can_send_frame(&f);
+    last += 500;
+    osDelayUntil(last);                  /* 每 500ms */
   }
   /* USER CODE END Status_Send */
 }

@@ -49,16 +49,12 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-QueueHandle_t xBreathQueue; // 呼吸灯控制队列
-QueueHandle_t xBeepQueue;   // 蜂鸣器控制队列
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
-void vFeedbackTask(void *pvParameters); // 100Hz 反馈
-void vControlTask(void *pvParameters);  // 呼吸灯 + 蜂鸣器
-void vStatusTask(void *pvParameters);   // 500ms 状态公告
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -100,15 +96,7 @@ int main(void)
   MX_CAN1_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);         /* 启动呼吸灯 PWM */
-  xBreathQueue = xQueueCreate(5, sizeof(uint32_t)); // 呼吸灯控制：存开关+周期
-  xBeepQueue = xQueueCreate(5, sizeof(uint8_t));    // 蜂鸣器：存鸣响次数
-  can_start();
-
-  // 创建 FreeRTOS 任务
-  xTaskCreate(vFeedbackTask, "Feedback", 256, NULL, 3, NULL);
-  xTaskCreate(vControlTask, "Control", 256, NULL, 2, NULL);
-  xTaskCreate(vStatusTask, "Status", 256, NULL, 1, NULL);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);   /* 启动呼吸灯 PWM */
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -176,120 +164,6 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-// ========== 任务1：100Hz 反馈 ==========
-void vFeedbackTask(void *pvParameters)
-{
-  TickType_t xLastWakeTime = xTaskGetTickCount();
-  float feedback_val = 0.0f;
-  uint8_t tx_data[4];
-  CAN_TxHeaderTypeDef txHeader;
-
-  txHeader.IDE = CAN_ID_STD;
-  txHeader.StdId = ID_SLAVE_FEEDBACK; // 0x002
-  txHeader.DLC = 4;
-  txHeader.TransmitGlobalTime = DISABLE;
-
-  while (1)
-  {
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10)); // 精确10ms
-
-    // 生成变化数据（0.0 ~ 1.0 循环）
-    feedback_val += 0.01f;
-    if (feedback_val > 1.0f)
-      feedback_val = 0.0f;
-    memcpy(tx_data, &feedback_val, sizeof(float));
-
-    uint32_t mailbox;
-    HAL_CAN_AddTxMessage(&hcan1, &txHeader, tx_data, &mailbox);
-  }
-}
-
-// ========== 任务2：命令执行（呼吸灯 + 蜂鸣器） ==========
-void vControlTask(void *pvParameters)
-{
-  uint8_t beep_count = 0;
-  uint32_t breath_cmd = 0;
-  uint8_t enable = 0;
-  uint16_t period = 1000;
-
-  // 呼吸灯渐变变量（假设 PWM 周期为 1000）
-  uint16_t pwm_value = 0;
-  int8_t direction = 1;
-
-  while (1)
-  {
-    // 1. 处理蜂鸣器指令（非阻塞）
-    if (xQueueReceive(xBeepQueue, &beep_count, 0) == pdTRUE)
-    {
-      for (int i = 0; i < beep_count; i++)
-      {
-        HAL_GPIO_WritePin(BEEP_GPIO_Port, BEEP_Pin, GPIO_PIN_SET);
-        vTaskDelay(pdMS_TO_TICKS(100)); // 鸣 100ms
-        HAL_GPIO_WritePin(BEEP_GPIO_Port, BEEP_Pin, GPIO_PIN_RESET);
-        vTaskDelay(pdMS_TO_TICKS(50)); // 停 50ms
-      }
-    }
-
-    // 2. 接收呼吸灯控制指令（非阻塞）
-    if (xQueueReceive(xBreathQueue, &breath_cmd, 0) == pdTRUE)
-    {
-      enable = (breath_cmd >> 16) & 0xFF;
-      period = breath_cmd & 0xFFFF;
-    }
-
-    // 3. 执行呼吸灯 PWM 渐变
-    if (enable)
-    {
-      // 根据 period 计算步进延时（period 越大，呼吸越慢）
-      uint16_t step_delay = period / 50;
-      if (step_delay < 1)
-        step_delay = 1;
-
-      // 改变占空比（假设 ARR = 1000）
-      pwm_value += direction;
-      if (pwm_value >= 1000)
-      {
-        pwm_value = 1000;
-        direction = -1;
-      }
-      if (pwm_value <= 0)
-      {
-        pwm_value = 0;
-        direction = 1;
-      }
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pwm_value);
-
-      vTaskDelay(pdMS_TO_TICKS(step_delay));
-    }
-    else
-    {
-      // 关闭呼吸灯
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
-      vTaskDelay(pdMS_TO_TICKS(100));
-    }
-  }
-}
-
-// ========== 任务3：500ms 状态公告 ==========
-void vStatusTask(void *pvParameters)
-{
-  TickType_t xLastWakeTime = xTaskGetTickCount();
-  uint8_t status_data[1] = {0x55}; // 0x55 = 从板在线
-  CAN_TxHeaderTypeDef txHeader;
-
-  txHeader.IDE = CAN_ID_STD;
-  txHeader.StdId = ID_SLAVE_STATUS; // 0x012
-  txHeader.DLC = 1;
-  txHeader.TransmitGlobalTime = DISABLE;
-
-  while (1)
-  {
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(500));
-
-    uint32_t mailbox;
-    HAL_CAN_AddTxMessage(&hcan1, &txHeader, status_data, &mailbox);
-  }
-}
 
 /* USER CODE END 4 */
 

@@ -27,16 +27,6 @@
 
 /* USER CODE BEGIN 0 */
 
-
-// 从板状态变量
-volatile uint8_t g_breath_enable = 0;
-volatile uint16_t g_breath_period = 1000;
-volatile uint8_t g_beep_times = 0;
-volatile uint8_t g_master_alive = 0; // 收到主板0x02010101时置1
-
-// 外部队列句柄
-extern QueueHandle_t xBreathQueue;
-extern QueueHandle_t xBeepQueue;
 /* USER CODE END 0 */
 
 CAN_HandleTypeDef hcan1;
@@ -141,41 +131,50 @@ void HAL_CAN_MspDeInit(CAN_HandleTypeDef *canHandle)
 }
 
 /* USER CODE BEGIN 1 */
+#include "cmsis_os.h"
+#include "app_proto.h"
 
 extern osMessageQueueId_t canRxQ;
 
-/* 主板硬件过滤: 只收从板反馈0x002 / 从板状态0x012 / 蜂鸣指令0x003,
+/* 从板硬件过滤: 只放行主板呼吸灯指令0x001 / CANable蜂鸣0x003 / 主板状态0x02010101(扩展帧),
  * 500Hz 噪声等其它 ID 在硬件层直接被丢弃 */
 static void can_config_filter(void)
 {
+  /* 标准帧 0x001 (掩码全1 = 精确匹配) */
   CAN_FilterTypeDef f = {0};
-
-  // ----- 过滤器0：接收标准帧 ID_BREATH_CTRL (0x001) 和 ID_BEEP_CMD (0x003) -----
-  f.FilterBank = 0;
-  f.FilterMode = CAN_FILTERMODE_IDLIST; // 列表模式，精确匹配
-  f.FilterScale = CAN_FILTERSCALE_32BIT;
-  // 32位列表：低16位存第一个ID（左移5位），高16位存第二个ID
-  f.FilterIdHigh = (ID_BREATH_CTRL << 5) & 0xFFFF;
-  f.FilterIdLow = (ID_BEEP_CMD << 5) & 0xFFFF;
-  f.FilterMaskIdHigh = 0xFFFF; // 掩码全1，精确匹配
-  f.FilterMaskIdLow = 0xFFFF;
+  f.FilterActivation     = CAN_FILTER_ENABLE;
+  f.FilterBank           = 0;
+  f.FilterMode           = CAN_FILTERMODE_IDMASK;
+  f.FilterScale          = CAN_FILTERSCALE_32BIT;
+  f.FilterIdHigh         = (uint16_t)(ID_BREATH_CTRL << 5);
+  f.FilterIdLow          = 0;
+  f.FilterMaskIdHigh     = (uint16_t)(0x7FFu << 5);
+  f.FilterMaskIdLow      = 0;
   f.FilterFIFOAssignment = CAN_RX_FIFO0;
-  f.FilterActivation = ENABLE;
-  HAL_CAN_ConfigFilter(&hcan1, &f);
+  if (HAL_CAN_ConfigFilter(&hcan1, &f) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-  // ----- 过滤器1：接收扩展帧 ID_MASTER_STATUS (0x02010101) -----
+  /* 标准帧 0x003 */
   f.FilterBank = 1;
-  f.FilterMode = CAN_FILTERMODE_IDMASK; // 掩码模式
-  f.FilterScale = CAN_FILTERSCALE_32BIT;
-  // 扩展帧ID存储：高16位放ID>>13，低16位放(ID<<3)|CAN_ID_EXT
-  uint32_t ext_id = ID_MASTER_STATUS;
-  f.FilterIdHigh = (uint16_t)(ext_id >> 13);
-  f.FilterIdLow = (uint16_t)((ext_id << 3) | CAN_ID_EXT);
-  f.FilterMaskIdHigh = 0xFFFF; // 精确匹配
-  f.FilterMaskIdLow = 0xFFFF;
-  f.FilterFIFOAssignment = CAN_RX_FIFO0;
-  f.FilterActivation = ENABLE;
-  HAL_CAN_ConfigFilter(&hcan1, &f);
+  f.FilterIdHigh = (uint16_t)(ID_BEEP_CMD << 5);
+  f.FilterMaskIdHigh = (uint16_t)(0x7FFu << 5);
+  if (HAL_CAN_ConfigFilter(&hcan1, &f) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* 扩展帧 0x02010101 */
+  f.FilterBank = 2;
+  f.FilterIdHigh = (uint16_t)(ID_MASTER_STATUS >> 13);
+  f.FilterIdLow  = (uint16_t)((ID_MASTER_STATUS << 3) | CAN_ID_EXT);
+  f.FilterMaskIdHigh = 0xFFFF;
+  f.FilterMaskIdLow  = 0xFFFF;
+  if (HAL_CAN_ConfigFilter(&hcan1, &f) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 /* 在任务里调用: 配置过滤 -> 启动 CAN -> 使能 RX0 中断 */
@@ -192,14 +191,14 @@ void can_send_frame(const can_frame_t *f)
   CAN_TxHeaderTypeDef tx = {0};
   uint32_t mailbox;
 
-  if (f->id > 0x7FF) /* 0x02010101 为扩展帧 */
+  if (f->id > 0x7FF)               /* 0x02010101 为扩展帧 */
   {
-    tx.IDE = CAN_ID_EXT;
+    tx.IDE   = CAN_ID_EXT;
     tx.ExtId = f->id;
   }
   else
   {
-    tx.IDE = CAN_ID_STD;
+    tx.IDE   = CAN_ID_STD;
     tx.StdId = f->id;
   }
   tx.RTR = CAN_RTR_DATA;
@@ -210,48 +209,15 @@ void can_send_frame(const can_frame_t *f)
 /* RX0 中断回调(ISR): 取报文入队, 任务里再处理 */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
-  if (hcan->Instance != CAN1)
-    return;
+  if (hcan->Instance != CAN1) return;
 
-  CAN_RxHeaderTypeDef rxHeader;
-  uint8_t rxData[8];
-  HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rxHeader, rxData);
-
-  // 处理标准帧
-  if (rxHeader.IDE == CAN_ID_STD)
+  can_frame_t f;
+  CAN_RxHeaderTypeDef rx;
+  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx, f.data) == HAL_OK)
   {
-    switch (rxHeader.StdId)
-    {
-    case ID_BREATH_CTRL: // 0x001
-      g_breath_enable = rxData[0];
-      g_breath_period = (rxData[1] << 8) | rxData[2];
-      if (xBreathQueue != NULL)
-      {
-        uint32_t cmd = (g_breath_enable << 16) | g_breath_period;
-        xQueueSendFromISR(xBreathQueue, &cmd, NULL);
-      }
-      break;
-
-    case ID_BEEP_CMD: // 0x003
-      g_beep_times = rxData[0];
-      if (xBeepQueue != NULL)
-      {
-        xQueueSendFromISR(xBeepQueue, &g_beep_times, NULL);
-      }
-      break;
-
-      // 0x012 是从板自己发送的状态帧，从板无需接收，忽略
-      // 0x002 也是从板发送的反馈，忽略
-    }
-  }
-  else // 扩展帧
-  {
-    if (rxHeader.ExtId == ID_MASTER_STATUS) // 0x02010101
-    {
-      g_master_alive = 1;
-      // 可以翻转LED指示（例如用板上的某个LED）
-      // HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
-    }
+    f.id  = (rx.IDE == CAN_ID_EXT) ? rx.ExtId : rx.StdId;
+    f.dlc = rx.DLC;
+    osMessageQueuePut(canRxQ, &f, 0, 0);
   }
 }
 /* USER CODE END 1 */
