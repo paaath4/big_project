@@ -25,7 +25,6 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <math.h>
 #include <string.h>
 #include "app_proto.h"
 #include "tim.h"
@@ -193,24 +192,24 @@ void MX_FREERTOS_Init(void) {
 void Breath_Led(void *argument)
 {
   /* USER CODE BEGIN Breath_Led */
-  /* 呼吸灯: 按周期更新 PC6 上 TIM3_CH1 的 PWM 占空比 */
-  uint32_t t = 0;
-  for(;;)
+  /* 呼吸灯: 线性渐变 0↔1000, 100 步走完一个周期 */
+  int pwm = 0, dir = 20;
+  for (;;)
   {
     if (g_breath_on)
     {
-      float phase = 2.0f * 3.14159f * (float)t / (float)g_period_ms;
-      g_breath_val = 0.5f + 0.5f * sinf(phase);              /* 0~1 正弦 */
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1,
-                            (uint32_t)(g_breath_val * 999.0f));
-      t = (t + 10) % g_period_ms;
+      pwm += dir;                                  /* 每步 ±20 */
+      if (pwm <= 0 || pwm >= 1000) dir = -dir;     /* 到顶/到底折返 */
+      g_breath_val = (float)pwm / 1000.0f;         /* 0~1, 供反馈用 */
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)pwm);
+      osDelay(g_period_ms / 100);                  /* 每步延时 = 周期/100 */
     }
     else
     {
       g_breath_val = 0.0f;
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
+      osDelay(100);
     }
-    osDelay(10);
   }
   /* USER CODE END Breath_Led */
 }
