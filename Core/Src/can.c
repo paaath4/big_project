@@ -23,6 +23,7 @@
 #include "queue.h"
 #include <string.h>
 #include "app_proto.h"
+#include "cmsis_os.h"
 
 /* USER CODE BEGIN 0 */
 
@@ -140,8 +141,6 @@ void HAL_CAN_MspDeInit(CAN_HandleTypeDef *canHandle)
 }
 
 /* USER CODE BEGIN 1 */
-#include "cmsis_os.h"
-#include "app_proto.h"
 
 extern osMessageQueueId_t canRxQ;
 
