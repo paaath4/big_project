@@ -1,20 +1,20 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * File Name          : freertos.c
-  * Description        : Code for freertos applications
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * File Name          : freertos.c
+ * Description        : Code for freertos applications
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2026 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 
 /* Includes ------------------------------------------------------------------*/
@@ -54,19 +54,19 @@ osMessageQueueId_t canTxQ;
 osMessageQueueId_t canRxQ;
 
 /* 共享状态 */
-volatile uint8_t  g_breath_on    = 0;
-volatile uint16_t g_period_ms    = 2000;   /* 呼吸周期, 可被 VOFA 指令修改 */
-volatile float    g_breath_val   = 0.0f;   /* 主板自身呼吸亮度 0~1 */
-volatile float    g_slave_val    = 0.0f;   /* 从板 100Hz 反馈的 float */
-volatile uint8_t  g_slave_valid  = 0;
-volatile uint8_t  g_slave_status = 0;
+volatile uint8_t g_breath_on = 0;
+volatile uint16_t g_period_ms = 2000; /* 呼吸周期, 可被 VOFA 指令修改 */
+volatile float g_breath_val = 0.0f;   /* 主板自身呼吸亮度 0~1 */
+volatile float g_slave_val = 0.0f;    /* 从板 100Hz 反馈的 float */
+volatile uint8_t g_slave_valid = 0;
+volatile uint8_t g_slave_status = 0;
 
 extern void can_start(void);
 extern void can_send_frame(const can_frame_t *f);
 extern void vofa_uart_start_rx(void);
 extern void vofa_send_floats(float *data, uint8_t n);
 
-void beep_times(uint8_t n);   /* 定义在文件底部, 先声明供 StartTask05 调用 */
+void beep_times(uint8_t n); /* 定义在文件底部, 先声明供 StartTask05 调用 */
 /* USER CODE END Variables */
 /* Definitions for BreathLed__Task */
 osThreadId_t BreathLed__TaskHandle;
@@ -141,9 +141,9 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* 中断(串口/CAN) -> 任务 传数据用 */
-  vofaCmdQ = osMessageQueueNew(4, 3, NULL);               /* 3字节 VOFA 指令 */
-  canTxQ   = osMessageQueueNew(8, sizeof(can_frame_t), NULL);  /* 待发送 CAN 帧 */
-  canRxQ   = osMessageQueueNew(16, sizeof(can_frame_t), NULL); /* 收到的 CAN 帧 */
+  vofaCmdQ = osMessageQueueNew(4, 3, NULL);                  /* 3字节 VOFA 指令 */
+  canTxQ = osMessageQueueNew(8, sizeof(can_frame_t), NULL);  /* 待发送 CAN 帧 */
+  canRxQ = osMessageQueueNew(16, sizeof(can_frame_t), NULL); /* 收到的 CAN 帧 */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -174,103 +174,85 @@ void MX_FREERTOS_Init(void) {
 
 /* USER CODE BEGIN Header_Breath_Led */
 /**
-  * @brief  Function implementing the BreathLed__Task thread.
-  * @param  argument: Not used
-  * @retval None
-  */
+ * @brief  Function implementing the BreathLed__Task thread.
+ * @param  argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_Breath_Led */
 void Breath_Led(void *argument)
 {
   /* USER CODE BEGIN Breath_Led */
-  /* 呼吸灯: 按周期更新 PC6 上 TIM3_CH1 的 PWM 占空比 */
-  uint32_t t = 0;
-  for(;;)
+  /* 软件 PWM 控制 LED1 (PA4) */
+  uint16_t phase = 0; // 0~100 对应占空比步进
+  while (1)
   {
-    if (g_breath_on)
+    if (g_breath_on) // 全局变量由 CAN 命令更新
     {
-      float phase = 2.0f * 3.14159f * (float)t / (float)g_period_ms;
-      g_breath_val = 0.5f + 0.5f * sinf(phase);              /* 0~1 正弦 */
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1,
-                            (uint32_t)(g_breath_val * 999.0f));
-      t = (t + 10) % g_period_ms;
+      /* 正弦变化，周期为 g_period_ms (单位 ms) */
+      float rad = 2.0f * 3.14159f * (float)phase / 100.0f;
+      uint8_t duty = (uint8_t)(50 * (sinf(rad) + 1)); // 0~100
+      uint16_t on_time = g_period_ms * duty / 100;
+      uint16_t off_time = g_period_ms - on_time;
+
+      HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_SET);
+      osDelay(on_time);
+      HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_RESET);
+      osDelay(off_time);
+
+      phase = (phase + 1) % 100;
     }
     else
     {
-      g_breath_val = 0.0f;
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
+      HAL_GPIO_WritePin(LED_1_GPIO_Port, LED_1_Pin, GPIO_PIN_RESET);
+      osDelay(100);
     }
-    osDelay(10);
   }
-  /* USER CODE END Breath_Led */
 }
+  /* USER CODE END Breath_Led */
+
 
 /* USER CODE BEGIN Header_Status_Led */
 /**
-* @brief Function implementing the StatusLed_Task thread.
-* @param argument: Not used
-* @retval None
-*/
+ * @brief Function implementing the StatusLed_Task thread.
+ * @param argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_Status_Led */
 void Status_Led(void *argument)
 {
   /* USER CODE BEGIN Status_Led */
-  /* 状态灯: 两颗灯不同频率闪烁, 指示系统运行 */
-  uint32_t cnt = 0;
+  /* Infinite loop */
   for(;;)
   {
-    cnt++;
-    if (cnt % 5 == 0)  HAL_GPIO_TogglePin(LED_1_GPIO_Port, LED_1_Pin);  /* 每 500ms */
-    if (cnt % 10 == 0) HAL_GPIO_TogglePin(LED_2_GPIO_Port, LED_2_Pin);  /* 每 1000ms */
-    osDelay(100);
+    osDelay(1);
   }
   /* USER CODE END Status_Led */
 }
 
 /* USER CODE BEGIN Header_Can_Rx */
 /**
-* @brief Function implementing the Can_Rx_Task thread.
-* @param argument: Not used
-* @retval None
-*/
+ * @brief Function implementing the Can_Rx_Task thread.
+ * @param argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_Can_Rx */
 void Can_Rx(void *argument)
 {
   /* USER CODE BEGIN Can_Rx */
-  /* CAN 接收: 处理从板反馈/状态、CANable 蜂鸣指令 */
-  can_frame_t f;
+  /* Infinite loop */
   for(;;)
   {
-    if (osMessageQueueGet(canRxQ, &f, NULL, osWaitForever) == osOK)
-    {
-      switch (f.id)
-      {
-        case ID_SLAVE_FEEDBACK:            /* 从板 100Hz float */
-          if (f.dlc >= 4)
-          {
-            memcpy(&g_slave_val, f.data, 4);
-            g_slave_valid = 1;
-          }
-          break;
-        case ID_SLAVE_STATUS:              /* 从板状态报文 */
-          g_slave_status = f.data[0];
-          break;
-        case ID_BEEP_CMD:                  /* CANable 蜂鸣定次数 */
-          if (f.dlc >= 1) beep_times(f.data[0]);
-          break;
-        default:
-          break;
-      }
-    }
+    osDelay(1);
   }
   /* USER CODE END Can_Rx */
 }
 
 /* USER CODE BEGIN Header_Feedback */
 /**
-* @brief Function implementing the Feedback_Task thread.
-* @param argument: Not used
-* @retval None
-*/
+ * @brief Function implementing the Feedback_Task thread.
+ * @param argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_Feedback */
 void Feedback(void *argument)
 {
@@ -285,10 +267,10 @@ void Feedback(void *argument)
 
 /* USER CODE BEGIN Header_Status_Send */
 /**
-* @brief Function implementing the Status_Send_Tsa thread.
-* @param argument: Not used
-* @retval None
-*/
+ * @brief Function implementing the Status_Send_Tsa thread.
+ * @param argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_Status_Send */
 void Status_Send(void *argument)
 {
@@ -306,7 +288,8 @@ void Status_Send(void *argument)
 /* 蜂鸣器按次数响应 (定次数, 上限保护避免长时间阻塞任务) */
 void beep_times(uint8_t n)
 {
-  if (n > 10) n = 10;
+  if (n > 10)
+    n = 10;
   for (uint8_t i = 0; i < n; i++)
   {
     HAL_GPIO_WritePin(BEEP_GPIO_Port, BEEP_Pin, GPIO_PIN_SET);
