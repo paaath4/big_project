@@ -195,7 +195,6 @@ void Breath_Led(void *argument)
   /* USER CODE END Breath_Led */
 }
 
-
 /* USER CODE BEGIN Header_Status_Led */
 /**
  * @brief Function implementing the StatusLed_Task thread.
