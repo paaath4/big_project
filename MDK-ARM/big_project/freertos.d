@@ -43,7 +43,6 @@ big_project\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex
 big_project\freertos.o: ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h
 big_project\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os.h
 big_project\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h
-big_project\freertos.o: D:\keil5\ARM\ARMCC\Bin\..\include\math.h
 big_project\freertos.o: D:\keil5\ARM\ARMCC\Bin\..\include\string.h
 big_project\freertos.o: ../Core/Inc/app_proto.h
 big_project\freertos.o: ../Core/Inc/tim.h
