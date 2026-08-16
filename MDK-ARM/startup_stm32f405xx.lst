@@ -831,10 +831,10 @@ interwork --depend=big_project\startup_stm32f405xx.d -obig_project\startup_stm3
 2F4xx_HAL_Driver/Inc/Legacy -I../Middlewares/Third_Party/FreeRTOS/Source/includ
 e -I../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I../Middlewares/T
 hird_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I../Drivers/CMSIS/Device/ST/
-STM32F4xx/Include -I../Drivers/CMSIS/Include -I.\RTE\_big_project -IF:\Keil\ARM
-\Pack\ARM\CMSIS\5.9.0\CMSIS\Core\Include --predefine="__UVISION_VERSION SETA 53
-7" --predefine="_RTE_ SETA 1" --predefine="STM32F405xx SETA 1" --predefine="_RT
-E_ SETA 1" --list=startup_stm32f405xx.lst startup_stm32f405xx.s
+STM32F4xx/Include -I../Drivers/CMSIS/Include -I.\RTE\_big_project -ID:\keil5\AR
+M\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include --predefine="__UVISION_VERSION SETA 5
+37" --predefine="_RTE_ SETA 1" --predefine="STM32F405xx SETA 1" --predefine="_R
+TE_ SETA 1" --list=startup_stm32f405xx.lst startup_stm32f405xx.s
 
 
 
